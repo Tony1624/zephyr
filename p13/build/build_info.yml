@@ -1,0 +1,63 @@
+cmake:
+  application:
+    configuration-dir: '/home/dharm/zephyrproject/zephyr/samples/prac1/p13'
+    source-dir: '/home/dharm/zephyrproject/zephyr/samples/prac1/p13'
+  board:
+    name: 'disco_l475_iot1'
+    path:
+     - '/home/dharm/zephyrproject/zephyr/boards/st/disco_l475_iot1'
+    qualifiers: 'stm32l475xx'
+    revision: ''
+  devicetree:
+    bindings-dirs:
+     - '/home/dharm/zephyrproject/zephyr/dts/bindings'
+    files:
+     - '/home/dharm/zephyrproject/zephyr/boards/st/disco_l475_iot1/disco_l475_iot1.dts'
+     - '/home/dharm/zephyrproject/zephyr/samples/prac1/p13/boards/disco_l475_iot1.overlay'
+    include-dirs:
+     - '/home/dharm/zephyrproject/modules/hal/ambiq/dts'
+     - '/home/dharm/zephyrproject/modules/hal/atmel/include'
+     - '/home/dharm/zephyrproject/modules/hal/bouffalolab/include'
+     - '/home/dharm/zephyrproject/modules/hal/bouffalolab/include/zephyr'
+     - '/home/dharm/zephyrproject/modules/hal/gigadevice/include'
+     - '/home/dharm/zephyrproject/modules/hal/microchip/include'
+     - '/home/dharm/zephyrproject/modules/hal/microchip/dts'
+     - '/home/dharm/zephyrproject/modules/hal/nuvoton/dts'
+     - '/home/dharm/zephyrproject/modules/hal/nxp/dts'
+     - '/home/dharm/zephyrproject/modules/hal/stm32/dts'
+     - '/home/dharm/zephyrproject/modules/hal/ti/dts'
+     - '/home/dharm/zephyrproject/zephyr/include'
+     - '/home/dharm/zephyrproject/zephyr/include/zephyr'
+     - '/home/dharm/zephyrproject/zephyr/dts/common'
+     - '/home/dharm/zephyrproject/zephyr/dts/vendor'
+     - '/home/dharm/zephyrproject/zephyr/dts/rx'
+     - '/home/dharm/zephyrproject/zephyr/dts/x86'
+     - '/home/dharm/zephyrproject/zephyr/dts/xtensa'
+     - '/home/dharm/zephyrproject/zephyr/dts/sparc'
+     - '/home/dharm/zephyrproject/zephyr/dts/riscv'
+     - '/home/dharm/zephyrproject/zephyr/dts/posix'
+     - '/home/dharm/zephyrproject/zephyr/dts/arm64'
+     - '/home/dharm/zephyrproject/zephyr/dts/arm'
+     - '/home/dharm/zephyrproject/zephyr/dts/arc'
+     - '/home/dharm/zephyrproject/zephyr/dts'
+    user-files:
+     - '/home/dharm/zephyrproject/zephyr/samples/prac1/p13/boards/disco_l475_iot1.overlay'
+  kconfig:
+    files:
+     - '/home/dharm/zephyrproject/zephyr/boards/st/disco_l475_iot1/disco_l475_iot1_defconfig'
+     - '/home/dharm/zephyrproject/zephyr/samples/prac1/p13/prj.conf'
+     - '/home/dharm/zephyrproject/zephyr/samples/prac1/p13/boards/disco_l475_iot1.conf'
+    user-files:
+     - '/home/dharm/zephyrproject/zephyr/samples/prac1/p13/prj.conf'
+     - '/home/dharm/zephyrproject/zephyr/samples/prac1/p13/boards/disco_l475_iot1.conf'
+  toolchain:
+    name: 'zephyr'
+    path: '/home/dharm/zephyr-sdk-0.17.2'
+  zephyr:
+    version: '4.2.0-rc3'
+    zephyr-base: '/home/dharm/zephyrproject/zephyr'
+version: '0.1.0'
+west:
+  command: '/home/dharm/zephyrproject/.venv/bin/west build -p always -b disco_l475_iot1 .'
+  topdir: '/home/dharm/zephyrproject'
+  version: '1.4.0'
