@@ -1,16 +1,9 @@
-
 #include "pressure_sensor.h"
-
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/util.h>
-
-#include <zephyr/fs/fs.h>
-#include <zephyr/fs/littlefs.h>
-#include <zephyr/storage/flash_map.h>
-
 #include <zephyr/logging/log.h>
+#include <stdio.h>
 
 LOG_MODULE_REGISTER(pressure);
 
@@ -21,26 +14,18 @@ const struct device *const pressure_dev = DEVICE_DT_GET(DT_ALIAS(pressure_sensor
 #error("Pressure sensor not found.");
 #endif
 
-void pressure_sensor_process_sample(void)
+int pressure_sensor_get_string(char *buf, size_t buf_len)
 {
-    if (!device_is_ready(pressure_dev)) {
-        LOG_ERR("sensor: %s device not ready.", pressure_dev->name);
-        return;
-    }
-
-    if (sensor_sample_fetch(pressure_dev) < 0) {
-        LOG_INF("Sensor sample update error");
-        return;
-    }
+    if (!device_is_ready(pressure_dev)) return -1;
+    if (sensor_sample_fetch(pressure_dev) < 0) return -1;
 
     struct sensor_value pressure;
-    if (sensor_channel_get(pressure_dev, SENSOR_CHAN_PRESS, &pressure) < 0) {
-        LOG_ERR("Cannot read pressure channel");
-        return;
-    }
+    if (sensor_channel_get(pressure_dev, SENSOR_CHAN_PRESS, &pressure) < 0) return -1;
 
-    /* display pressure */
-    LOG_INF("Pressure:%.1f kPa", sensor_value_to_double(&pressure));
+    double p = sensor_value_to_double(&pressure);
+    LOG_INF("Pressure: %.1f kPa", p);
+
+    return snprintf(buf, buf_len, "Pressure: %.1f kPa\n", p);
 }
 
 int pressure_sensor_init(void)
@@ -49,8 +34,5 @@ int pressure_sensor_init(void)
         LOG_ERR("sensor: %s device not ready.", pressure_dev->name);
         return -1;
     }
-
-    pressure_sensor_process_sample();
-
     return 0;
 }

@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "littlefs.h": "c",
+        "stddef.h": "c"
+    }
+}

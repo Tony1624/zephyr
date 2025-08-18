@@ -1,0 +1,59 @@
+/ {
+    aliases {
+        ht-sensor = &hts;
+        pressure-sensor = &lps22hb;
+        imu-sensor = &lsm6dsl;
+    };
+};
+
+&i2c2 {
+
+    hts: hts221@5f {
+        compatible = "st,hts221";
+        reg = <0x5f>;
+        drdy-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
+    };
+
+    lps22hb: lps22hb-press@5d {
+        compatible = "st,lps22hb-press";
+        reg = <0x5d>;
+    };
+
+    lsm6dsl: lsm6dsl@6a {
+        compatible = "st,lsm6dsl";
+        reg = <0x6a>;
+        irq-gpios = <&gpiod 11 GPIO_ACTIVE_HIGH>;
+    };
+};
+
+/* boards/arm/disco_l475_iot1.overlay */
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /* Firmware area */
+        firmware_partition: partition@0 {
+            label = "firmware";
+            reg = <0x00000000 DT_SIZE_K(896)>;
+        };
+
+        /* LittleFS partitions */
+        humidity_fs: partition@e0000 {
+            label = "humidity_lfs";
+            reg = <0x000E0000 DT_SIZE_K(32)>;
+        };
+
+        pressure_fs: partition@e8000 {
+            label = "pressure_lfs";
+            reg = <0x000E8000 DT_SIZE_K(32)>;
+        };
+
+        temp_fs: partition@f0000 {
+            label = "temp_lfs";
+            reg = <0x000F0000 DT_SIZE_K(64)>;
+        };
+    };
+};
+
