@@ -41,9 +41,7 @@ int imu_sensor_get_string(char *buf, size_t buf_len)
    LOG_INF("Accel: x=%.2f y=%.2f z=%.2f", axd, ayd, azd);
    LOG_INF("Gyro : x=%.2f y=%.2f z=%.2f", gxd, gyd, gzd);
 
-    return snprintf(buf, buf_len,
-                    "Accel: %.2f, %.2f, %.2f | Gyro: %.2f, %.2f, %.2f\n",
-                    axd, ayd, azd, gxd, gyd, gzd);
+    return snprintf(buf, buf_len,"Accel: %.2f, %.2f, %.2f | Gyro: %.2f, %.2f, %.2f\n",axd, ayd, azd, gxd, gyd, gzd);
 }
 
 int imu_sensor_init(void)

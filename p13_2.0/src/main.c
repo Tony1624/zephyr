@@ -59,8 +59,7 @@ void hum_thread(void *a, void *b, void *c)
     while (1) {
         if (hum_temp_sensor_get_string(buffer, sizeof(buffer)) > 0) {
             fs_file_t_init(&file);
-            if (fs_open(&file, MOUNT_POINT_HUM "/humidity.txt",
-                        FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
+            if (fs_open(&file, MOUNT_POINT_HUM "/humidity.txt",FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
                 fs_write(&file, buffer, strlen(buffer));
                 fs_close(&file);
             }
@@ -77,8 +76,7 @@ void press_thread(void *a, void *b, void *c)
     while (1) {
         if (pressure_sensor_get_string(buffer, sizeof(buffer)) > 0) {
             fs_file_t_init(&file);
-            if (fs_open(&file, MOUNT_POINT_PRESS "/pressure.txt",
-                        FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
+            if (fs_open(&file, MOUNT_POINT_PRESS "/pressure.txt",FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
                 fs_write(&file, buffer, strlen(buffer));
                 fs_close(&file);
             }
@@ -95,8 +93,7 @@ void imu_thread(void *a, void *b, void *c)
     while (1) {
         if (imu_sensor_get_string(buffer, sizeof(buffer)) > 0) {
             fs_file_t_init(&file);
-            if (fs_open(&file, MOUNT_POINT_TEMP "/imu.txt",
-                        FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
+            if (fs_open(&file, MOUNT_POINT_TEMP "/imu.txt",FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
                 fs_write(&file, buffer, strlen(buffer));
                 fs_close(&file);
             }
@@ -109,10 +106,7 @@ void imu_thread(void *a, void *b, void *c)
 static int cmd_start_hum(const struct shell *sh, size_t argc, char **argv)
 {
     if (!hum_tid) {
-        hum_tid = k_thread_create(&hum_thread_data, hum_stack,
-                                  K_THREAD_STACK_SIZEOF(hum_stack),
-                                  hum_thread, NULL, NULL, NULL,
-                                  5, 0, K_NO_WAIT);
+        hum_tid = k_thread_create(&hum_thread_data, hum_stack,K_THREAD_STACK_SIZEOF(hum_stack),hum_thread, NULL, NULL, NULL,5, 0, K_NO_WAIT);
         shell_print(sh, "Humidity logging started.");
     } else {
         shell_print(sh, "Humidity logging already running.");
@@ -135,10 +129,7 @@ static int cmd_stop_hum(const struct shell *sh, size_t argc, char **argv)
 static int cmd_start_press(const struct shell *sh, size_t argc, char **argv)
 {
     if (!press_tid) {
-        press_tid = k_thread_create(&press_thread_data, press_stack,
-                                    K_THREAD_STACK_SIZEOF(press_stack),
-                                    press_thread, NULL, NULL, NULL,
-                                    5, 0, K_NO_WAIT);
+        press_tid = k_thread_create(&press_thread_data, press_stack,K_THREAD_STACK_SIZEOF(press_stack),press_thread, NULL, NULL, NULL,5, 0, K_NO_WAIT);
         shell_print(sh, "Pressure logging started.");
     } else {
         shell_print(sh, "Pressure logging already running.");
@@ -161,10 +152,7 @@ static int cmd_stop_press(const struct shell *sh, size_t argc, char **argv)
 static int cmd_start_imu(const struct shell *sh, size_t argc, char **argv)
 {
     if (!imu_tid) {
-        imu_tid = k_thread_create(&imu_thread_data, imu_stack,
-                                  K_THREAD_STACK_SIZEOF(imu_stack),
-                                  imu_thread, NULL, NULL, NULL,
-                                  5, 0, K_NO_WAIT);
+        imu_tid = k_thread_create(&imu_thread_data, imu_stack,K_THREAD_STACK_SIZEOF(imu_stack),imu_thread, NULL, NULL, NULL,5, 0, K_NO_WAIT);
         shell_print(sh, "IMU logging started.");
     } else {
         shell_print(sh, "IMU logging already running.");
