@@ -1,5 +1,0 @@
-west:
-  command: /home/dharm/zephyrproject/.venv/bin/west build -p always -b disco_l475_iot1
-    .
-  topdir: /home/dharm/zephyrproject
-  version: 1.4.0

@@ -26,7 +26,6 @@
     };
 };
 
-/* boards/arm/disco_l475_iot1.overlay */
 &flash0 {
     partitions {
         compatible = "fixed-partitions";

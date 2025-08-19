@@ -3,6 +3,8 @@
         "littlefs.h": "c",
         "stddef.h": "c",
         "log.h": "c",
-        "limits": "c"
+        "limits": "c",
+        "shell.h": "c",
+        "flash_map.h": "c"
     }
 }
