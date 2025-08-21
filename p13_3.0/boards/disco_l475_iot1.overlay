@@ -1,0 +1,45 @@
+/ {
+    aliases {
+        ht-sensor = &hts;
+        pressure-sensor = &lps22hb;
+        imu-sensor = &lsm6dsl;
+    };
+};
+
+&i2c2 {
+
+    hts: hts221@5f {
+        compatible = "st,hts221";
+        reg = <0x5f>;
+        drdy-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
+    };
+
+    lps22hb: lps22hb-press@5d {
+        compatible = "st,lps22hb-press";
+        reg = <0x5d>;
+    };
+
+    lsm6dsl: lsm6dsl@6a {
+        compatible = "st,lsm6dsl";
+        reg = <0x6a>;
+        irq-gpios = <&gpiod 11 GPIO_ACTIVE_HIGH>;
+    };
+};
+
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        firmware_partition: partition@0 {
+            label = "firmware";
+            reg = <0x00000000 DT_SIZE_K(896)>;
+        };
+
+        logs_fs: partition@e0000 {
+            label = "logs_lfs";
+            reg = <0x000E0000 DT_SIZE_K(128)>;
+        };
+    };
+};
