@@ -1,0 +1,19 @@
+# Build and temporary files
+build/
+*.o
+*.elf
+*.bin
+
+# Python virtual env
+.venv/
+__pycache__/
+*.pyc
+
+# Editor/IDE files
+.vscode/
+*.swp
+
+# OS specific
+.DS_Store
+Thumbs.db
+

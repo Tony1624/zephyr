@@ -1,253 +1,322 @@
-#include "hum_temp_sensor.h"
-#include "imu_sensor.h"
-#include "pressure_sensor.h"
-
 #include <zephyr/kernel.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/fs/littlefs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/shell/shell.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
 #include <string.h>
+#include <zephyr/shell/shell.h>
 
-LOG_MODULE_REGISTER(main);
+#include "sensors_common.h"
+#include "hum_temp_sensor.h"
+#include "pressure_sensor.h"
+#include "imu_sensor.h"
 
-/* Mount points */
-#define MOUNT_POINT_HUM   "/lfs_hum"
-#define MOUNT_POINT_PRESS "/lfs_press"
-#define MOUNT_POINT_TEMP  "/lfs_temp"
+/* -------- Logging -------- */
+LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
-/* LittleFS configs */
-FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(lfs_hum);
-FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(lfs_press);
-FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(lfs_temp);
+/* Mount point & partition */
+static int littlefs_mount(void);
+static int log_open(void);
+static int log_write_snapshot(const struct all_sensors_data *d);
 
-static struct fs_mount_t mount_hum = {
-    .type = FS_LITTLEFS,
-    .fs_data = &lfs_hum,
-    .storage_dev = (void *)FIXED_PARTITION_ID(humidity_fs),
-    .mnt_point = MOUNT_POINT_HUM,
+/* Avoid symbol clash with littlefs function lfs_mount() */
+static struct fs_mount_t lfs_mnt;
+
+/* LittleFS backing storage descriptor */
+static struct fs_file_t log_file;
+
+#define LOG_MOUNT_POINT   "/lfs"
+#define LOG_FILE_PATH     LOG_MOUNT_POINT "/sensor_log.bin"
+
+/* Circular logging parameters */
+#define LOG_HEADER_MAGIC  0x53454E31u /* 'SEN1' */
+struct log_header {
+    uint32_t magic;
+    uint32_t write_off; /* offset within payload area (not counting header) */
 };
 
-static struct fs_mount_t mount_press = {
-    .type = FS_LITTLEFS,
-    .fs_data = &lfs_press,
-    .storage_dev = (void *)FIXED_PARTITION_ID(pressure_fs),
-    .mnt_point = MOUNT_POINT_PRESS,
-};
+/* Upper bound for file payload; keep conservative inside 128KB partition */
+#define LOG_PAYLOAD_MAX   (64 * 1024) /* 64KB for payload */
+#define LOG_HEADER_SIZE   (sizeof(struct log_header))
 
-static struct fs_mount_t mount_temp = {
-    .type = FS_LITTLEFS,
-    .fs_data = &lfs_temp,
-    .storage_dev = (void *)FIXED_PARTITION_ID(temp_fs),
-    .mnt_point = MOUNT_POINT_TEMP,
-};
+/* -------- IPC: message queue -------- */
+K_MSGQ_DEFINE(sensor_q, sizeof(struct all_sensors_data), 32, 4);
 
-/*--- Threads --- */
-static struct k_thread hum_thread_data, press_thread_data, imu_thread_data;
-static K_THREAD_STACK_DEFINE(hum_stack, 2048);
-static K_THREAD_STACK_DEFINE(press_stack, 2048);
-static K_THREAD_STACK_DEFINE(imu_stack, 2048);
+/* Shared latest snapshot guarded by mutex */
+static struct all_sensors_data g_last;
+static struct k_mutex g_last_lock;
 
-static k_tid_t hum_tid = NULL, press_tid = NULL, imu_tid = NULL;
+/* -------- Threads & stacks -------- */
+#define STACK_SZ 2048
+K_THREAD_STACK_DEFINE(ht_stack,    STACK_SZ);
+K_THREAD_STACK_DEFINE(press_stack, STACK_SZ);
+K_THREAD_STACK_DEFINE(imu_stack,   STACK_SZ);
+K_THREAD_STACK_DEFINE(log_stack,   STACK_SZ);
 
-void hum_thread(void *a, void *b, void *c)
+static struct k_thread ht_thread_data;
+static struct k_thread press_thread_data;
+static struct k_thread imu_thread_data;
+static struct k_thread log_thread_data;
+
+/* -------- Sensor producer threads -------- */
+static void ht_thread(void *, void *, void *)
 {
-    struct fs_file_t file;
-    char buffer[128];
+    (void)hum_temp_sensor_init();
+    while (1) {
+        int16_t t=0, h=0;
+        if (hum_temp_sensor_fetch(&t, &h) == 0) {
+            struct all_sensors_data snap;
+
+            k_mutex_lock(&g_last_lock, K_FOREVER);
+            /* start from last, update our fields */
+            snap = g_last;
+            snap.ht.temperature = t;
+            snap.ht.humidity    = h;
+            g_last = snap;
+            k_mutex_unlock(&g_last_lock);
+
+            /* try to queue; if full, drop oldest then put */
+            if (k_msgq_put(&sensor_q, &snap, K_NO_WAIT) != 0) {
+                struct all_sensors_data trash;
+                k_msgq_get(&sensor_q, &trash, K_NO_WAIT);
+                k_msgq_put(&sensor_q, &snap, K_NO_WAIT);
+            }
+
+            /* minimal UART prints (constant strings only) */
+            printk("HT T=");
+            printk("%d", (int)snap.ht.temperature);
+            printk(" H=");
+            printk("%d\n", (int)snap.ht.humidity);
+        }
+        k_sleep(K_MSEC(500));
+    }
+}
+
+static void press_thread(void *, void *, void *)
+{
+    (void)pressure_sensor_init();
+    while (1) {
+        int32_t p=0;
+        if (pressure_sensor_fetch(&p) == 0) {
+            struct all_sensors_data snap;
+
+            k_mutex_lock(&g_last_lock, K_FOREVER);
+            snap = g_last;
+            snap.press.pressure = p;
+            g_last = snap;
+            k_mutex_unlock(&g_last_lock);
+
+            if (k_msgq_put(&sensor_q, &snap, K_NO_WAIT) != 0) {
+                struct all_sensors_data trash;
+                k_msgq_get(&sensor_q, &trash, K_NO_WAIT);
+                k_msgq_put(&sensor_q, &snap, K_NO_WAIT);
+            }
+
+            printk("P ");
+            printk("%d\n", (int)snap.press.pressure);
+        }
+        k_sleep(K_MSEC(500));
+    }
+}
+
+static void imu_thread(void *, void *, void *)
+{
+    (void)imu_sensor_init();
+    while (1) {
+        int16_t ax=0, ay=0, az=0, gx=0, gy=0, gz=0;
+        if (imu_sensor_fetch(&ax, &ay, &az, &gx, &gy, &gz) == 0) {
+            struct all_sensors_data snap;
+
+            k_mutex_lock(&g_last_lock, K_FOREVER);
+            snap = g_last;
+            snap.imu.accel.x = ax;
+            snap.imu.accel.y = ay;
+            snap.imu.accel.z = az;
+            snap.imu.gyro.x  = gx;
+            snap.imu.gyro.y  = gy;
+            snap.imu.gyro.z  = gz;
+            g_last = snap;
+            k_mutex_unlock(&g_last_lock);
+
+            if (k_msgq_put(&sensor_q, &snap, K_NO_WAIT) != 0) {
+                struct all_sensors_data trash;
+                k_msgq_get(&sensor_q, &trash, K_NO_WAIT);
+                k_msgq_put(&sensor_q, &snap, K_NO_WAIT);
+            }
+
+            printk("IMU A:");
+            printk("%d", (int)snap.imu.accel.x); printk(",");
+            printk("%d", (int)snap.imu.accel.y); printk(",");
+            printk("%d", (int)snap.imu.accel.z); printk(" G:");
+            printk("%d", (int)snap.imu.gyro.x);  printk(",");
+            printk("%d", (int)snap.imu.gyro.y);  printk(",");
+            printk("%d\n", (int)snap.imu.gyro.z);
+        }
+        k_sleep(K_MSEC(500));
+    }
+}
+
+/* -------- Logger consumer thread -------- */
+static void log_thread(void *, void *, void *)
+{
+    if (littlefs_mount() != 0) {
+        LOG_ERR("FS mount failed");
+        return;
+    }
+    if (log_open() != 0) {
+        LOG_ERR("Open log failed");
+        return;
+    }
 
     while (1) {
-        if (hum_temp_sensor_get_string(buffer, sizeof(buffer)) > 0) {
-            fs_file_t_init(&file);
-            if (fs_open(&file, MOUNT_POINT_HUM "/humidity.txt",FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
-                fs_write(&file, buffer, strlen(buffer));
-                fs_close(&file);
+        struct all_sensors_data d;
+        if (k_msgq_get(&sensor_q, &d, K_FOREVER) == 0) {
+            int rc = log_write_snapshot(&d);
+            if (rc) {
+                LOG_ERR("log write err %d", rc);
+                /* backoff a bit on error */
+                k_sleep(K_MSEC(1000));
             }
         }
-        k_sleep(K_SECONDS(2));
     }
 }
 
-void press_thread(void *a, void *b, void *c)
+/* -------- LittleFS helpers -------- */
+static int littlefs_mount(void)
 {
-    struct fs_file_t file;
-    char buffer[128];
+    /* Storage device: use the fixed partition from DTS */
+    static struct fs_littlefs lfs_data;
 
-    while (1) {
-        if (pressure_sensor_get_string(buffer, sizeof(buffer)) > 0) {
-            fs_file_t_init(&file);
-            if (fs_open(&file, MOUNT_POINT_PRESS "/pressure.txt",FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
-                fs_write(&file, buffer, strlen(buffer));
-                fs_close(&file);
-            }
+    lfs_mnt.type = FS_LITTLEFS;
+    lfs_mnt.fs_data = &lfs_data;
+    lfs_mnt.storage_dev = (void *)FIXED_PARTITION_ID(logs_fs);
+    lfs_mnt.mnt_point = LOG_MOUNT_POINT;
+
+    int rc = fs_mount(&lfs_mnt);
+    if (rc == 0) {
+        LOG_INF("Mounted at %s", LOG_MOUNT_POINT);
+    }
+    return rc;
+}
+
+static int read_header(struct log_header *hdr)
+{
+    int rc = fs_seek(&log_file, 0, FS_SEEK_SET);
+    if (rc) return rc;
+
+    ssize_t r = fs_read(&log_file, hdr, sizeof(*hdr));
+    if (r < 0) return (int)r;
+    if (r != sizeof(*hdr)) return -EIO;
+
+    if (hdr->magic != LOG_HEADER_MAGIC) return -EINVAL;
+    if (hdr->write_off >= LOG_PAYLOAD_MAX) return -EINVAL;
+    return 0;
+}
+
+static int write_header(const struct log_header *hdr)
+{
+    int rc = fs_seek(&log_file, 0, FS_SEEK_SET);
+    if (rc) return rc;
+    ssize_t w = fs_write(&log_file, hdr, sizeof(*hdr));
+    return (w == sizeof(*hdr)) ? 0 : -EIO;
+}
+
+static int log_open(void)
+{
+    fs_file_t_init(&log_file);
+    int rc = fs_open(&log_file, LOG_FILE_PATH, FS_O_CREATE | FS_O_RDWR);
+    if (rc) return rc;
+
+    struct log_header hdr;
+    rc = read_header(&hdr);
+    if (rc) {
+        /* initialize */
+        hdr.magic = LOG_HEADER_MAGIC;
+        hdr.write_off = 0;
+
+        /* Preallocate payload area with 0xFF */
+        rc = fs_seek(&log_file, LOG_HEADER_SIZE, FS_SEEK_SET);
+        if (rc) return rc;
+
+        uint8_t buf[64];
+        memset(buf, 0xFF, sizeof(buf));
+        size_t total = 0;
+        while (total < LOG_PAYLOAD_MAX) {
+            size_t chunk = MIN(sizeof(buf), LOG_PAYLOAD_MAX - total);
+            ssize_t w = fs_write(&log_file, buf, chunk);
+            if (w != chunk) return -EIO;
+            total += w;
         }
-        k_sleep(K_SECONDS(3));
-    }
-}
 
-void imu_thread(void *a, void *b, void *c)
-{
-    struct fs_file_t file;
-    char buffer[256];
-
-    while (1) {
-        if (imu_sensor_get_string(buffer, sizeof(buffer)) > 0) {
-            fs_file_t_init(&file);
-            if (fs_open(&file, MOUNT_POINT_TEMP "/imu.txt",FS_O_CREATE | FS_O_WRITE | FS_O_APPEND) == 0) {
-                fs_write(&file, buffer, strlen(buffer));
-                fs_close(&file);
-            }
-        }
-        k_sleep(K_SECONDS(4));
-    }
-}
-
-/* --- Shell Commands --- */
-static int cmd_start_hum(const struct shell *sh, size_t argc, char **argv)
-{
-    if (!hum_tid) {
-        hum_tid = k_thread_create(&hum_thread_data, hum_stack,K_THREAD_STACK_SIZEOF(hum_stack),hum_thread, NULL, NULL, NULL,5, 0, K_NO_WAIT);
-        shell_print(sh, "Humidity logging started.");
-    } else {
-        shell_print(sh, "Humidity logging already running.");
+        /* write header at start */
+        rc = write_header(&hdr);
+        if (rc) return rc;
     }
     return 0;
 }
 
-static int cmd_stop_hum(const struct shell *sh, size_t argc, char **argv)
+
+static int log_write_snapshot(const struct all_sensors_data *d)
 {
-    if (hum_tid) {
-        k_thread_abort(hum_tid);
-        hum_tid = NULL;
-        shell_print(sh, "Humidity logging stopped.");
-    } else {
-        shell_print(sh, "Humidity logging not running.");
+    struct log_header hdr;
+    int rc = read_header(&hdr);
+    if (rc) return rc;
+
+    /* Where to write: header + write_off */
+    off_t pos = LOG_HEADER_SIZE + hdr.write_off;
+
+    rc = fs_seek(&log_file, pos, FS_SEEK_SET);
+    if (rc) return rc;
+
+    ssize_t w = fs_write(&log_file, d, sizeof(*d));
+    if (w != sizeof(*d)) return -EIO;
+
+    /* advance write_off with wrap */
+    uint32_t next = hdr.write_off + sizeof(*d);
+    if (next + sizeof(*d) > LOG_PAYLOAD_MAX) {
+        next = 0; /* wrap to start of payload */
     }
-    return 0;
-}
+    hdr.write_off = next;
 
-static int cmd_start_press(const struct shell *sh, size_t argc, char **argv)
-{
-    if (!press_tid) {
-        press_tid = k_thread_create(&press_thread_data, press_stack,K_THREAD_STACK_SIZEOF(press_stack),press_thread, NULL, NULL, NULL,5, 0, K_NO_WAIT);
-        shell_print(sh, "Pressure logging started.");
-    } else {
-        shell_print(sh, "Pressure logging already running.");
-    }
-    return 0;
+    return write_header(&hdr);
 }
-
-static int cmd_stop_press(const struct shell *sh, size_t argc, char **argv)
-{
-    if (press_tid) {
-        k_thread_abort(press_tid);
-        press_tid = NULL;
-        shell_print(sh, "Pressure logging stopped.");
-    } else {
-        shell_print(sh, "Pressure logging not running.");
-    }
-    return 0;
-}
-
-static int cmd_start_imu(const struct shell *sh, size_t argc, char **argv)
-{
-    if (!imu_tid) {
-        imu_tid = k_thread_create(&imu_thread_data, imu_stack,K_THREAD_STACK_SIZEOF(imu_stack),imu_thread, NULL, NULL, NULL,5, 0, K_NO_WAIT);
-        shell_print(sh, "IMU logging started.");
-    } else {
-        shell_print(sh, "IMU logging already running.");
-    }
-    return 0;
-}
-
-static int cmd_stop_imu(const struct shell *sh, size_t argc, char **argv)
-{
-    if (imu_tid) {
-        k_thread_abort(imu_tid);
-        imu_tid = NULL;
-        shell_print(sh, "IMU logging stopped.");
-    } else {
-        shell_print(sh, "IMU logging not running.");
-    }
-    return 0;
-}
-
-static int cmd_fetch_all(const struct shell *sh, size_t argc, char **argv)
-{
-    char buf[256];
-    if (hum_temp_sensor_get_string(buf, sizeof(buf)) > 0)
-        shell_print(sh, "%s", buf);
-    if (pressure_sensor_get_string(buf, sizeof(buf)) > 0)
-        shell_print(sh, "%s", buf);
-    if (imu_sensor_get_string(buf, sizeof(buf)) > 0)
-        shell_print(sh, "%s", buf);
-    return 0;
-}
-
-/* Function to clear all log files */
 static int cmd_clear_logs(const struct shell *shell, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    int ret;
-
-    ret = fs_unlink(MOUNT_POINT_HUM "/humidity.txt");
-    if (ret < 0 && ret != -ENOENT) {
-        shell_fprintf(shell, SHELL_ERROR, "Failed to remove humidity.txt (%d)\n", ret);
-    }
-
-    ret = fs_unlink(MOUNT_POINT_PRESS "/pressure.txt");
-    if (ret < 0 && ret != -ENOENT) {
-        shell_fprintf(shell, SHELL_ERROR, "Failed to remove pressure.txt (%d)\n", ret);
-    }
-
-    ret = fs_unlink(MOUNT_POINT_TEMP "/imu.txt");
-    if (ret < 0 && ret != -ENOENT) {
-        shell_fprintf(shell, SHELL_ERROR, "Failed to remove imu.txt (%d)\n", ret);
-    }
-
-    shell_fprintf(shell, SHELL_NORMAL, "All log files cleared!\n");
-    return 0;
-}
-
-/* Shell command tree */
-SHELL_STATIC_SUBCMD_SET_CREATE(sub_sensors,
-    SHELL_CMD(start_hum, NULL, "Start humidity logging thread", cmd_start_hum),
-    SHELL_CMD(stop_hum, NULL, "Stop humidity logging thread", cmd_stop_hum),
-    SHELL_CMD(start_press, NULL, "Start pressure logging thread", cmd_start_press),
-    SHELL_CMD(stop_press, NULL, "Stop pressure logging thread", cmd_stop_press),
-    SHELL_CMD(start_imu, NULL, "Start IMU logging thread", cmd_start_imu),
-    SHELL_CMD(stop_imu, NULL, "Stop IMU logging thread", cmd_stop_imu),
-    SHELL_CMD(fetch_all, NULL, "Fetch one-shot from all sensors", cmd_fetch_all),
-    SHELL_SUBCMD_SET_END
-);
-
-SHELL_CMD_REGISTER(sensors, &sub_sensors, "Sensor logging commands", NULL);
-SHELL_CMD_REGISTER(clear_logs, NULL, "Delete all sensor log files", cmd_clear_logs);
-
-/* --- Main ---*/
-static void mount_fs(struct fs_mount_t *mp)
-{
-    int rc = fs_mount(mp);
-    if (rc == 0) {
-        LOG_INF("Mounted at %s", mp->mnt_point);
+    int ret = fs_unlink(LOG_FILE_PATH);
+    if (ret == -ENOENT) {
+        shell_print(shell, "No log file to delete.");
+    } else if (ret) {
+        shell_error(shell, "Failed to delete log file (%d)", ret);
+        return ret;
     } else {
-        LOG_ERR("Failed to mount %s (%d)", mp->mnt_point, rc);
+        shell_print(shell, "Log file deleted.");
     }
+    return 0;
 }
 
-int main(void)
+SHELL_CMD_REGISTER(clear_logs, NULL, "Delete sensor_log.bin file", cmd_clear_logs);
+/* -------- main -------- */
+void main(void)
 {
-    LOG_INF("Sensor shell logging demo starting...");
+    k_mutex_init(&g_last_lock);
+    memset(&g_last, 0, sizeof(g_last));
 
-    hun_temp_sensor_init();
-    pressure_sensor_init();
-    imu_sensor_init();
+    /* Start producers */
+    k_thread_create(&ht_thread_data, ht_stack, K_THREAD_STACK_SIZEOF(ht_stack),
+                    ht_thread, NULL, NULL, NULL, 5, 0, K_NO_WAIT);
 
-    mount_fs(&mount_hum);
-    mount_fs(&mount_press);
-    mount_fs(&mount_temp);
+    k_thread_create(&press_thread_data, press_stack, K_THREAD_STACK_SIZEOF(press_stack),
+                    press_thread, NULL, NULL, NULL, 5, 0, K_NO_WAIT);
 
-    return 0;
+    k_thread_create(&imu_thread_data, imu_stack, K_THREAD_STACK_SIZEOF(imu_stack),
+                    imu_thread, NULL, NULL, NULL, 5, 0, K_NO_WAIT);
+
+    /* Start logger */
+    k_thread_create(&log_thread_data, log_stack, K_THREAD_STACK_SIZEOF(log_stack),
+                    log_thread, NULL, NULL, NULL, 6, 0, K_NO_WAIT);
 }

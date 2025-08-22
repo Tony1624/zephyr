@@ -1,9 +1,10 @@
 #ifndef PRESSURE_SENSOR_H
 #define PRESSURE_SENSOR_H
-#include <stddef.h>
+
+#include <stdint.h>
 
 int pressure_sensor_init(void);
-/* New */
-int pressure_sensor_get_string(char *buf, size_t buf_len);
+/* returns 0 on success; press in Pa */
+int pressure_sensor_fetch(int32_t *press);
 
-#endif /* PRESSURE_SENSOR_H */
+#endif

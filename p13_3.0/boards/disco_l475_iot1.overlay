@@ -7,7 +7,6 @@
 };
 
 &i2c2 {
-
     hts: hts221@5f {
         compatible = "st,hts221";
         reg = <0x5f>;
@@ -43,3 +42,4 @@
         };
     };
 };
+

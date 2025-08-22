@@ -1,42 +1,42 @@
 #include "hum_temp_sensor.h"
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/sensor.h>
-#include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
-#include <stdio.h>
 
-LOG_MODULE_REGISTER(hum_temp);
-
-#if DT_NODE_EXISTS(DT_ALIAS(ht_sensor))
-#define HUM_TEMP_NODE DT_ALIAS(ht_sensor)
-const struct device *const hts_dev = DEVICE_DT_GET(DT_ALIAS(ht_sensor));
-#else
-#error("Humidity-Temperature sensor not found.");
+/* alias in overlay: ht-sensor */
+#define HT_NODE DT_ALIAS(ht_sensor)
+#if !DT_NODE_HAS_STATUS(HT_NODE, okay)
+#error "HTS221 not enabled in devicetree"
 #endif
 
-int hum_temp_sensor_get_string(char *buf, size_t buf_len)
+static const struct device *ht_dev;
+
+int hum_temp_sensor_init(void)
 {
-    if (!device_is_ready(hts_dev)) return -1;
-    if (sensor_sample_fetch(hts_dev) < 0) return -1;
-
-    struct sensor_value temp, hum;
-    if (sensor_channel_get(hts_dev, SENSOR_CHAN_AMBIENT_TEMP, &temp) < 0) return -1;
-    if (sensor_channel_get(hts_dev, SENSOR_CHAN_HUMIDITY, &hum) < 0) return -1;
-
-    double t = sensor_value_to_double(&temp);
-    double h = sensor_value_to_double(&hum);
-
-    LOG_INF("Temperature: %.1f C", t);
-    LOG_INF("Humidity: %.1f %%", h);
-
-    return snprintf(buf, buf_len, "Temperature: %.1f C, Humidity: %.1f %%\n", t, h);
+    ht_dev = DEVICE_DT_GET(HT_NODE);
+    return device_is_ready(ht_dev) ? 0 : -ENODEV;
 }
 
-int hun_temp_sensor_init(void)
+int hum_temp_sensor_fetch(int16_t *temp, int16_t *hum)
 {
-    if (!device_is_ready(hts_dev)) {
-        LOG_ERR("sensor: %s device not ready.", hts_dev->name);
-        return -1;
-    }
+    if (!ht_dev) return -ENODEV;
+
+    int rc = sensor_sample_fetch(ht_dev);
+    if (rc) return rc;
+
+    struct sensor_value t, h;
+    rc = sensor_channel_get(ht_dev, SENSOR_CHAN_AMBIENT_TEMP, &t);
+    if (rc) return rc;
+    rc = sensor_channel_get(ht_dev, SENSOR_CHAN_HUMIDITY, &h);
+    if (rc) return rc;
+
+    /* Convert to fixed-point small ints: 0.01 units */
+    /* sensor_value: val1 integer, val2 micro */
+    int32_t t_centi = (int32_t)t.val1 * 100 + t.val2 / 10000; /* micro to centi */
+    int32_t h_centi = (int32_t)h.val1 * 100 + h.val2 / 10000;
+
+    if (temp) *temp = (int16_t)t_centi;
+    if (hum)  *hum  = (int16_t)h_centi;
+
     return 0;
 }

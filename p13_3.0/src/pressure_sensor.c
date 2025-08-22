@@ -1,38 +1,38 @@
 #include "pressure_sensor.h"
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/sensor.h>
-#include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
-#include <stdio.h>
 
-LOG_MODULE_REGISTER(pressure);
-
-#if DT_NODE_EXISTS(DT_ALIAS(pressure_sensor))
-#define PRESSURE_NODE DT_ALIAS(pressure_sensor)
-const struct device *const pressure_dev = DEVICE_DT_GET(DT_ALIAS(pressure_sensor));
-#else
-#error("Pressure sensor not found.");
+/* alias in overlay: pressure-sensor */
+#define PRESS_NODE DT_ALIAS(pressure_sensor)
+#if !DT_NODE_HAS_STATUS(PRESS_NODE, okay)
+#error "LPS22HB not enabled in devicetree"
 #endif
 
-int pressure_sensor_get_string(char *buf, size_t buf_len)
-{
-    if (!device_is_ready(pressure_dev)) return -1;
-    if (sensor_sample_fetch(pressure_dev) < 0) return -1;
-
-    struct sensor_value pressure;
-    if (sensor_channel_get(pressure_dev, SENSOR_CHAN_PRESS, &pressure) < 0) return -1;
-
-    double p = sensor_value_to_double(&pressure);
-   LOG_INF("Pressure: %.1f kPa", p);
-
-    return snprintf(buf, buf_len, "Pressure: %.1f kPa\n", p);
-}
+static const struct device *press_dev;
 
 int pressure_sensor_init(void)
 {
-    if (!device_is_ready(pressure_dev)) {
-        LOG_ERR("sensor: %s device not ready.", pressure_dev->name);
-        return -1;
-    }
+    press_dev = DEVICE_DT_GET(PRESS_NODE);
+    return device_is_ready(press_dev) ? 0 : -ENODEV;
+}
+
+int pressure_sensor_fetch(int32_t *press)
+{
+    if (!press_dev) return -ENODEV;
+
+    int rc = sensor_sample_fetch(press_dev);
+    if (rc) return rc;
+
+    struct sensor_value p;
+    rc = sensor_channel_get(press_dev, SENSOR_CHAN_PRESS, &p);
+    if (rc) return rc;
+
+    /* Pa: val1 in kPa? No—Zephyr uses SI units.
+       SENSOR_CHAN_PRESS is in kPa in many drivers; convert to Pa carefully.
+       Commonly: p.val1 = kPa integer, p.val2 = kPa micro.
+       Convert to Pa: (val1*1000 + val2/1000) */
+    int64_t pa = (int64_t)p.val1 * 1000 + p.val2 / 1000;
+    if (press) *press = (int32_t)pa;
     return 0;
 }
